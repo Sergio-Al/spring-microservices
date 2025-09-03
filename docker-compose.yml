@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  # MySQL Database for Warehouse
+  warehouse-db:
+    image: mysql:8.0
+    container_name: warehouse-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: warehouse
+    ports:
+      - "13306:3306"
+    volumes:
+      - warehouse_data:/var/lib/mysql
+    networks:
+      - monolito-network
+    restart: unless-stopped
+
+  # PostgreSQL Database for Sales
+  pg-db:
+    image: postgres:15
+    container_name: postgres-pghw
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123456
+    ports:
+      - "15432:5432"
+    volumes:
+      - pghw_data:/var/lib/postgresql/data
+    networks:
+      - monolito-network
+    restart: unless-stopped
+
+volumes:
+  warehouse_data:
+    driver: local
+  pghw_data:
+    driver: local
+
+networks:
+  monolito-network:
+    driver: bridge
