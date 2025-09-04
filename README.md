@@ -350,24 +350,34 @@ curl http://localhost:8083/api/accounting/health
 curl -X POST http://localhost:8080/api/sales \
 -H "Content-Type: application/json" \
 -d '{
-  "productId": 1,
-  "quantity": 1,
-  "unitPrice": 100.00,
-  "description": "Test successful sale"
-}'
+    "productId": 1,
+    "quantity": 1,
+    "unitPrice": 100.00,
+    "discountPercentage": 10.0,
+    "customerId": 1,
+    "customerName": "Test Customer",
+    "salesperson": "Sales Rep",
+    "paymentMethod": "credit_card",
+    "paymentStatus": "paid"
+  }'
 ```
 
 ### Test Compensation (Rollback)
 ```bash
-# This will fail and trigger rollback
+# This will fail and trigger rollback with non-existent productId
 curl -X POST http://localhost:8080/api/sales \
 -H "Content-Type: application/json" \
 -d '{
-  "productId": 999,
-  "quantity": 1,
-  "unitPrice": 100.00,
-  "description": "Test failed sale - non-existent product"
-}'
+    "productId": 999,
+    "quantity": 1,
+    "unitPrice": 100.00,
+    "discountPercentage": 10.0,
+    "customerId": 1,
+    "customerName": "Test Customer",
+    "salesperson": "Sales Rep",
+    "paymentMethod": "credit_card",
+    "paymentStatus": "paid"
+  }'
 ```
 
 ### Verify Service Registration

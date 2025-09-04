@@ -30,7 +30,7 @@ public class SaleApi {
     }
 
     @PostMapping
-    public ResponseEntity<SaleDto> createSale(@Valid @RequestBody SaleDto saleDto) {
+    public ResponseEntity<?> createSale(@Valid @RequestBody SaleDto saleDto) {
         try {
             // Create and save the sale using the business logic
             Sale savedSale = compleSaleBl.createAndSaveSale(saleDto);
@@ -42,10 +42,16 @@ public class SaleApi {
 
         } catch (IllegalArgumentException e) {
             // Handle business logic validation errors
-            return ResponseEntity.badRequest().build();
+            ErrorResponse error = new ErrorResponse("VALIDATION_ERROR", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        } catch (RuntimeException e) {
+            // Handle transaction failures with compensation
+            ErrorResponse error = new ErrorResponse("TRANSACTION_FAILED", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
         } catch (Exception e) {
             // Handle unexpected errors
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+            ErrorResponse error = new ErrorResponse("INTERNAL_ERROR", "An unexpected error occurred: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
         }
     }
 
@@ -114,4 +120,29 @@ public class SaleApi {
         dto.setUpdatedAt(sale.getUpdatedAt());
         return dto;
     }
+}
+
+/**
+ * Error response class for API error handling
+ */
+class ErrorResponse {
+    private String error;
+    private String message;
+    private long timestamp;
+    
+    public ErrorResponse(String error, String message) {
+        this.error = error;
+        this.message = message;
+        this.timestamp = System.currentTimeMillis();
+    }
+    
+    // Getters and setters
+    public String getError() { return error; }
+    public void setError(String error) { this.error = error; }
+    
+    public String getMessage() { return message; }
+    public void setMessage(String message) { this.message = message; }
+    
+    public long getTimestamp() { return timestamp; }
+    public void setTimestamp(long timestamp) { this.timestamp = timestamp; }
 }
