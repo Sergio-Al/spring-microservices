@@ -15,8 +15,6 @@ import com.market.sales.bl.CompleSaleBl;
 import com.market.sales.dto.SaleDto;
 import com.market.sales.entity.Sale;
 
-import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.util.List;
 import java.util.stream.Collectors;
 
