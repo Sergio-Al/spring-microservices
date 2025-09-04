@@ -5,6 +5,7 @@ import com.market.accounting.dto.JournalDto;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -54,10 +55,33 @@ public class AccountingApi {
 
     @DeleteMapping("/journals/{id}")
     public ResponseEntity<Void> deleteJournal(@PathVariable Integer id) {
-        boolean deleted = journalService.deleteJournalEntry(id);
-        if (deleted) {
-            return ResponseEntity.ok().build();
+        try {
+            boolean deleted = journalService.deleteJournalEntry(id);
+            if (deleted) {
+                return ResponseEntity.ok().build();
+            }
+            return ResponseEntity.notFound().build();
+        } catch (IllegalStateException e) {
+            // Entry is not in a state that allows deletion (e.g., not draft)
+            return ResponseEntity.status(HttpStatus.CONFLICT).build();
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
-        return ResponseEntity.notFound().build();
+    }
+
+    /**
+     * Get journal entry by journal entry number
+     * This is useful for lookup by the unique journal entry number
+     */
+    @GetMapping("/journals/entry/{journalEntryNumber}")
+    public ResponseEntity<JournalDto> getJournalEntryByNumber(@PathVariable String journalEntryNumber) {
+        try {
+            JournalDto journalEntry = journalService.getJournalEntryByNumber(journalEntryNumber);
+            return journalEntry != null 
+                ? ResponseEntity.ok(journalEntry)
+                : ResponseEntity.notFound().build();
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
     }
 }
