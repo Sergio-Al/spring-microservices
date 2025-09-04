@@ -26,6 +26,7 @@ public class CompleSaleBl {
 
     /**
      * Creates and persists a new Sale with full integration to warehouse and accounting services
+     * Implements compensating transaction pattern for rollback on failures
      * @param saleDto The sale information to create a sale for
      * @return The created Sale entity
      */
@@ -43,28 +44,55 @@ public class CompleSaleBl {
             throw new IllegalArgumentException("Product ID cannot be null");
         }
         
-        // 🔍 STEP 1: Validate product exists and has sufficient stock
-        ProductDto product = validateProductAndStock(saleDto.getProductId(), saleDto.getQuantity());
+        // 🎯 Track compensation data for rollback
+        CompensationData compensationData = new CompensationData();
         
-        // 🔢 STEP 2: Generate a unique sale number if not provided
-        String saleNumber = saleDto.getSaleNumber();
-        if (saleNumber == null || saleNumber.isEmpty()) {
-            saleNumber = generateSaleNumber();
+        try {
+            // 🔍 STEP 1: Validate product exists and has sufficient stock
+            ProductDto product = validateProductAndStock(saleDto.getProductId(), saleDto.getQuantity());
+            compensationData.setProductValidated(true);
+            compensationData.setOriginalStockQuantity(product.getStockQuantity());
+            
+            // 🔢 STEP 2: Generate a unique sale number if not provided
+            String saleNumber = saleDto.getSaleNumber();
+            if (saleNumber == null || saleNumber.isEmpty()) {
+                saleNumber = generateSaleNumber();
+            }
+            
+            // 🛍️ STEP 3: Create the sale entity
+            Sale sale = createSaleEntity(saleDto, saleNumber, product);
+            
+            // 💾 STEP 4: Persist the sale first (to get ID for references)
+            Sale savedSale = saleRepository.save(sale);
+            compensationData.setSaleCreated(true);
+            compensationData.setSaleId(savedSale.getId());
+            compensationData.setSaleNumber(savedSale.getSaleNumber());
+            
+            System.out.println("✅ Step 4: Sale created with ID: " + savedSale.getId());
+            
+            // 📦 STEP 5: Update stock in warehouse service
+            updateProductStockWithCompensation(saleDto.getProductId(), saleDto.getQuantity(), compensationData);
+            
+            System.out.println("✅ Step 5: Stock updated successfully");
+            
+            // 💰 STEP 6: Register sale in accounting journal
+            registerSaleInJournalWithCompensation(savedSale, compensationData);
+            
+            System.out.println("✅ Step 6: Journal entry created successfully");
+            System.out.println("🎉 Sale transaction completed successfully: " + savedSale.getSaleNumber());
+            
+            return savedSale;
+            
+        } catch (Exception e) {
+            System.err.println("❌ Error during sale process: " + e.getMessage());
+            System.err.println("🔄 Starting compensation/rollback process...");
+            
+            // Execute compensation/rollback
+            executeCompensation(compensationData);
+            
+            // Re-throw the exception after compensation
+            throw new RuntimeException("Sale transaction failed and was rolled back: " + e.getMessage(), e);
         }
-        
-        // 🛍️ STEP 3: Create the sale entity
-        Sale sale = createSaleEntity(saleDto, saleNumber, product);
-        
-        // 💾 STEP 4: Persist the sale first (to get ID for references)
-        Sale savedSale = saleRepository.save(sale);
-        
-        // 📦 STEP 5: Update stock in warehouse service
-        updateProductStock(saleDto.getProductId(), saleDto.getQuantity());
-        
-        // 💰 STEP 6: Register sale in accounting journal
-        registerSaleInJournal(savedSale);
-        
-        return savedSale;
     }
 
     /**
@@ -178,6 +206,140 @@ public class CompleSaleBl {
         journal.setStatus("draft");
         journal.setCreatedBy("sales-service");
         return journal;
+    }
+    
+    /**
+     * Updates product stock after successful sale via Warehouse service with compensation tracking
+     * @param productId The product ID
+     * @param quantitySold The quantity sold (reduces stock)
+     * @param compensationData Compensation data for rollback
+     */
+    private void updateProductStockWithCompensation(Integer productId, Integer quantitySold, CompensationData compensationData) {
+        try {
+            // 📦 Get current product to calculate new stock using service name
+            String getProductUrl = "http://warehouse/api/products/" + productId;
+            ProductDto currentProduct = restTemplate.getForObject(getProductUrl, ProductDto.class);
+            
+            if (currentProduct != null) {
+                // Calculate new stock quantity
+                Integer newStockQuantity = currentProduct.getStockQuantity() - quantitySold;
+                
+                // 📦 Update stock via warehouse service using service name
+                String updateStockUrl = "http://warehouse/api/products/" + productId + "/stock?newStock=" + newStockQuantity;
+                restTemplate.put(updateStockUrl, null);
+                
+                // Track for compensation
+                compensationData.setStockUpdated(true);
+                compensationData.setProductId(productId);
+                compensationData.setQuantityReduced(quantitySold);
+                
+                System.out.println("Successfully updated stock for product " + productId + 
+                                 ". New stock: " + newStockQuantity);
+            }
+            
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to update product stock for product " + productId + ": " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Registers sale in accounting journal via Accounting service with compensation tracking
+     * @param sale The completed sale
+     * @param compensationData Compensation data for rollback
+     */
+    private void registerSaleInJournalWithCompensation(Sale sale, CompensationData compensationData) {
+        try {
+            // 💰 Create journal entry for the sale using service name
+            JournalEntryDto journalEntry = createJournalEntryFromSale(sale);
+            String journalUrl = "http://accounting/api/accounting/journals";
+            
+            JournalEntryDto createdEntry = restTemplate.postForObject(journalUrl, journalEntry, JournalEntryDto.class);
+            
+            if (createdEntry != null) {
+                // Track for compensation
+                compensationData.setJournalEntryCreated(true);
+                compensationData.setJournalEntryId(createdEntry.getId());
+                compensationData.setJournalEntryNumber(createdEntry.getJournalEntryNumber());
+            }
+            
+            System.out.println("Successfully registered journal entry for sale " + sale.getSaleNumber());
+            
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to register sale in journal for sale " + sale.getSaleNumber() + ": " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Executes compensation/rollback operations when transaction fails
+     * @param compensationData Data needed for rollback operations
+     */
+    private void executeCompensation(CompensationData compensationData) {
+        System.out.println("🔄 Executing compensation actions...");
+        
+        // Rollback in reverse order (LIFO - Last In, First Out)
+        
+        // 💰 STEP 6 ROLLBACK: Delete journal entry if created
+        if (compensationData.isJournalEntryCreated()) {
+            rollbackJournalEntry(compensationData);
+        }
+        
+        // 📦 STEP 5 ROLLBACK: Restore stock if updated
+        if (compensationData.isStockUpdated()) {
+            rollbackStockUpdate(compensationData);
+        }
+        
+        // 💾 STEP 4 ROLLBACK: Delete sale record if created
+        if (compensationData.isSaleCreated()) {
+            rollbackSaleCreation(compensationData);
+        }
+        
+        System.out.println("✅ Compensation completed");
+    }
+    
+    /**
+     * Rollback journal entry creation
+     */
+    private void rollbackJournalEntry(CompensationData compensationData) {
+        try {
+            if (compensationData.getJournalEntryId() != null) {
+                String deleteUrl = "http://accounting/api/accounting/journals/" + compensationData.getJournalEntryId();
+                restTemplate.delete(deleteUrl);
+                System.out.println("🔄 Rolled back journal entry: " + compensationData.getJournalEntryNumber());
+            }
+        } catch (Exception e) {
+            System.err.println("⚠️ Warning: Failed to rollback journal entry: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Rollback stock update
+     */
+    private void rollbackStockUpdate(CompensationData compensationData) {
+        try {
+            if (compensationData.getProductId() != null && compensationData.getOriginalStockQuantity() != null) {
+                String restoreStockUrl = "http://warehouse/api/products/" + compensationData.getProductId() + 
+                                        "/stock?newStock=" + compensationData.getOriginalStockQuantity();
+                restTemplate.put(restoreStockUrl, null);
+                System.out.println("🔄 Rolled back stock for product " + compensationData.getProductId() + 
+                                 " to original quantity: " + compensationData.getOriginalStockQuantity());
+            }
+        } catch (Exception e) {
+            System.err.println("⚠️ Warning: Failed to rollback stock update: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Rollback sale creation
+     */
+    private void rollbackSaleCreation(CompensationData compensationData) {
+        try {
+            if (compensationData.getSaleId() != null) {
+                saleRepository.deleteById(compensationData.getSaleId());
+                System.out.println("🔄 Rolled back sale creation: " + compensationData.getSaleNumber());
+            }
+        } catch (Exception e) {
+            System.err.println("⚠️ Warning: Failed to rollback sale creation: " + e.getMessage());
+        }
     }
     
     /**
@@ -402,4 +564,61 @@ class JournalEntryDto {
     
     public String getCreatedBy() { return createdBy; }
     public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
+}
+
+/**
+ * Data class to track compensation/rollback operations
+ */
+class CompensationData {
+    // Step tracking
+    private boolean productValidated = false;
+    private boolean saleCreated = false;
+    private boolean stockUpdated = false;
+    private boolean journalEntryCreated = false;
+    
+    // Data for rollback
+    private Integer originalStockQuantity;
+    private Long saleId;
+    private String saleNumber;
+    private Integer productId;
+    private Integer quantityReduced;
+    private Integer journalEntryId;
+    private String journalEntryNumber;
+    
+    // Default constructor
+    public CompensationData() {}
+    
+    // Getters and setters
+    public boolean isProductValidated() { return productValidated; }
+    public void setProductValidated(boolean productValidated) { this.productValidated = productValidated; }
+    
+    public boolean isSaleCreated() { return saleCreated; }
+    public void setSaleCreated(boolean saleCreated) { this.saleCreated = saleCreated; }
+    
+    public boolean isStockUpdated() { return stockUpdated; }
+    public void setStockUpdated(boolean stockUpdated) { this.stockUpdated = stockUpdated; }
+    
+    public boolean isJournalEntryCreated() { return journalEntryCreated; }
+    public void setJournalEntryCreated(boolean journalEntryCreated) { this.journalEntryCreated = journalEntryCreated; }
+    
+    public Integer getOriginalStockQuantity() { return originalStockQuantity; }
+    public void setOriginalStockQuantity(Integer originalStockQuantity) { this.originalStockQuantity = originalStockQuantity; }
+    
+    public Long getSaleId() { return saleId; }
+    public void setSaleId(Long saleId) { this.saleId = saleId; }
+    
+    public String getSaleNumber() { return saleNumber; }
+    public void setSaleNumber(String saleNumber) { this.saleNumber = saleNumber; }
+    
+    public Integer getProductId() { return productId; }
+    public void setProductId(Integer productId) { this.productId = productId; }
+    
+    public Integer getQuantityReduced() { return quantityReduced; }
+    public void setQuantityReduced(Integer quantityReduced) { this.quantityReduced = quantityReduced; }
+    
+    public Integer getJournalEntryId() { return journalEntryId; }
+    public void setJournalEntryId(Integer journalEntryId) { this.journalEntryId = journalEntryId; }
+    
+    public String getJournalEntryNumber() { return journalEntryNumber; }
+    public void setJournalEntryNumber(String journalEntryNumber) { this.journalEntryNumber = journalEntryNumber; }
 }
